@@ -12,8 +12,3 @@ authors = [{name = "Syed Rakesh Uddin", email = "syedrakeshuddin@gmail.com"}]
 license = {text = "MIT"}
 requires-python = ">=3.8"
 keywords = ["logging","redaction","security","sensitive","privacy"]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Topic :: Security :: Privacy",
-]
