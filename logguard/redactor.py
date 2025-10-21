@@ -1,68 +1,52 @@
+import re
+import os
 
-import re, os
-from typing import Iterable, Pattern, List
-
-BASE_DIR = os.path.dirname(__file__)
-SENSITIVE_FILE = os.path.join(BASE_DIR, "sensitive_keys.txt")
+# Constant used for redacted values
 REDACTION_TEXT = "[REDACTED]"
 
-_default_patterns = [
-    # email
-    re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
-    # simple credit card-ish numbers (13-19 digits)
-    re.compile(r"\b\d{13,19}\b"),
-    # SSN-like
-    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
-    # IBAN-ish (very loose)
-    re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{1,30}\b")
-]
+# Path to the sensitive keys file
+SENSITIVE_KEYS_FILE = os.path.join(os.path.dirname(__file__), "sensitive_keys.txt")
 
-_sensitive_key_patterns: List[Pattern] = []
-_loaded = False
 
-def load_sensitive_keys(path: str = SENSITIVE_FILE):
-    global _sensitive_key_patterns, _loaded
-    if _loaded:
-        return
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            keys = [line.strip() for line in f if line.strip()]
-    except Exception:
-        keys = []
+def load_sensitive_keys():
+    """
+    Loads sensitive field names (e.g. password, api_key) from the sensitive_keys.txt file
+    and compiles regex patterns for each for quick redaction.
+    """
     patterns = []
-    for k in keys:
-        # build a forgiving pattern that matches e.g. "password", "user-password", "user.password", "userPassword", "user_password1"
-        escaped = re.escape(k)
-        # attempt to match as a key in "key: value" or "key=value" contexts, or as standalone token
-        p = re.compile(r"(?i)(" + escaped + r")\s*[:=\-]\s*([^,\s;]+)")
-        patterns.append(p)
-        # also match the key anywhere as a token
-        p2 = re.compile(r"(?i)\b" + escaped + r"\b")
-        patterns.append(p2)
-    _sensitive_key_patterns = patterns + _default_patterns
-    _loaded = True
+    if not os.path.exists(SENSITIVE_KEYS_FILE):
+        return patterns
 
-def redact(text: str) -> str:
+    with open(SENSITIVE_KEYS_FILE, "r", encoding="utf-8") as f:
+        keys = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+
+    for key in keys:
+        escaped = re.escape(key)
+        # Match patterns like:
+        # password=abc123, api_key: abcd-efgh, token - xyz
+        # Stop capturing at comma, semicolon, or newline
+        pattern = re.compile(rf"(?i)\b({escaped})\b\s*[:=\-]\s*([^,;\n]*)")
+        patterns.append(pattern)
+
+    return patterns
+
+
+# Preload all regex patterns at import time for performance
+_PATTERNS = load_sensitive_keys()
+
+
+def redact(message: str) -> str:
     """
-    Redact sensitive substrings from arbitrary text.
-    Strategy:
-    - Ensure sensitive key patterns are compiled (lazy load)
-    - For key:value patterns, replace the value part with REDACTION_TEXT keeping the key visible
-    - For general patterns (emails, cards) replace matches with REDACTION_TEXT
+    Replaces sensitive values in a log message with [REDACTED].
+
+    Example:
+        Input:  "email=user@example.com, password=12345"
+        Output: "email=[REDACTED], password=[REDACTED]"
     """
-    if not _loaded:
-        load_sensitive_keys()
-    s = text
-    # first handle key:value patterns (keep key, redact value)
-    for p in _sensitive_key_patterns:
-        try:
-            # if pattern captures two groups (key and value), preserve key and redact value
-            def repl(m):
-                if m.lastindex and m.lastindex >= 2:
-                    return m.group(1) + ": " + REDACTION_TEXT
-                else:
-                    return REDACTION_TEXT
-            s = p.sub(repl, s)
-        except re.error:
-            continue
-    return s
+    if not message or not isinstance(message, str):
+        return message
+
+    redacted = message
+    for pattern in _PATTERNS:
+        redacted = pattern.sub(lambda m: f"{m.group(1)}={REDACTION_TEXT}", redacted)
+    return redacted
